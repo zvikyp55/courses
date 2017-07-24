@@ -1,0 +1,191 @@
+---
+title: "Coursera Machine Learning - Exercise Prediction"
+author: "Jeremy Pachtinger"
+date: "July 23, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require("caret")
+require("corrplot")
+require("rpart")
+require("rpart.plot")
+require("randomForest")
+require("rattle")
+require("survival")
+require("splines")
+require("plyr")
+require("parallel")
+require("gbm")
+```
+
+# Predicting how well exercise is performed - Project Overview
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.   
+  
+In this project, data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants asked to perform barbell lifts correctly and incorrectly in 5 different ways, is used to predict the manner in which they did the exercise.
+
+## Getting the data
+
+The data used is kindly provided by:
+
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz4ngKX3KH6
+
+
+```{r Getting Data, cache=TRUE}
+exdata<-read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",na.strings=c("", "NA"))
+```
+
+## Exploratory Data Analysis
+
+A quick view of the data dimensions shows that we are dealing with a large data set.
+
+```{r pressure, echo=FALSE}
+print(c("rows","columns"))
+dim(exdata)
+```
+
+### Cleaning the data
+
+A summary of the data shows that many of the columns have only missing or NA type values, we'll remove any columns with mainly missing variables (over 95%). The following variables do not relate to the actual exercise metrics so want to also exclude them from our model: X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, & num_window. 
+```{r Cleaning Data, echo=TRUE, cache=TRUE}
+exdata2<-exdata[,-which(colMeans(is.na(exdata))>0.95)]
+dim(exdata2)
+exdata2<-exdata2[,-(1:7)]
+```
+
+
+##Preprocessing
+
+### Training & Test Datasets
+We need to split our data into training and test data sets, using a 70%:30% split.
+```{r PrePorcessing, echo=TRUE, cache=TRUE}
+set.seed(1234)
+istrain<-createDataPartition(exdata2$classe, p=0.7, list=FALSE)
+TrainData<-exdata2[istrain,]
+TestData<-exdata2[-istrain,]
+```
+
+### Variable Reduction
+
+ Here's a plot showing the correlation matrix, we see that some variables are highly correlated. We still have 52 predictor variables so to reduce the number of variables in the data set we'll remove any highly correlated variables (absolute value > 0.90).
+
+```{r Variable Reduction, echo=TRUE, cache=TRUE}
+corM<-cor(TrainData[,-53])
+corrplot(corM,type = "lower")
+corM = findCorrelation(corM, cutoff=0.9)
+corM = sort(corM)
+TrainData = TrainData[,-c(corM)]
+dim (TrainData)
+
+```
+
+
+The new data set has only ```r dim(TrainData)[2]-1``` variables.
+
+## Modeling
+At this point we're ready to model, but we need to select a model type as well as a cross-validation technique.
+
+### Model Types 
+
+As this is a classification model we'll use a decision tree, random forest, and boosting. We'll run all three and based on the results we'll either select a superior model of combine them into a model of models.
+
+### Cross-Validation
+ We need to also incorporate cross-validation to get a sense of the out-of-sample error we'll be getting on the Test data. This will help us with the final model selection as well as variable selection. As we have quite a large data set We'll use the k-fold technique with 10 folds.
+
+
+#### Decision Tree
+
+The final decision tree model has the following output and plot:
+```{r Modeling Decision, echo=TRUE, cache=TRUE}
+dtCntrl<-trainControl(method = "cv",number=10)
+dt<-train(classe~.,method="rpart",data=TrainData,trControl=dtCntrl)
+## dt$finalModel  ## not working in knitr manually inlcuding
+##  fancyRpartPlot(dt)
+``` 
+
+n= 13737 
+
+node), split, n, loss, yval, (yprob)
+      * denotes terminal node
+
+  1) root 13737 9831 A (0.28 0.19 0.17 0.16 0.18)  
+    2) pitch_forearm< -26.65 1214   56 A (0.95 0.046 0 0 0) *
+    3) pitch_forearm>=-26.65 12523 9775 A (0.22 0.21 0.19 0.18 0.2)  
+      6) magnet_belt_y>=555.5 11466 8719 A (0.24 0.23 0.21 0.18 0.15)  
+       12) yaw_belt>=169.5 568   50 A (0.91 0.039 0 0.049 0) *
+       13) yaw_belt< 169.5 10898 8321 B (0.2 0.24 0.22 0.19 0.15)  
+         26) magnet_dumbbell_z< -93.5 1320  539 A (0.59 0.28 0.045 0.058 0.03) *
+         27) magnet_dumbbell_z>=-93.5 9578 7243 C (0.15 0.23 0.24 0.2 0.17)  
+           54) magnet_dumbbell_y< 288.5 4135 2467 C (0.19 0.15 0.4 0.13 0.13) *
+           55) magnet_dumbbell_y>=288.5 5443 3853 B (0.12 0.29 0.12 0.26 0.2)  
+            110) total_accel_dumbbell>=5.5 4037 2575 B (0.08 0.36 0.16 0.16 0.23)  
+              220) pitch_dumbbell>=-24.84179 1940  787 B (0.036 0.59 0.025 0.11 0.23) *
+              221) pitch_dumbbell< -24.84179 2097 1492 C (0.12 0.15 0.29 0.21 0.23) *
+            111) total_accel_dumbbell< 5.5 1406  650 D (0.24 0.091 0.0092 0.54 0.12) *
+      7) magnet_belt_y< 555.5 1057  202 E (0.00095 0.0028 0.0019 0.19 0.81) *
+
+```{r echo=FALSE}
+library(knitr)
+## knitr::include_graphics('Rplot.jpg') 
+```
+
+#### Random Forest
+
+For the random forest we can reduce the k-fold to 5 to reduce the variance. The final model has the following confusion matrix and in sample Accuracy measure: 
+
+```{r Modeling Random Forest, echo=TRUE, cache=TRUE}
+rfCntrl<-trainControl(method = "cv",number=5)
+rf<-train(classe~.,method="rf",data=TrainData,trControl=rfCntrl)
+rf$finalModel
+```
+ 
+
+
+#### Boosting
+```{r Modeling Boosting, echo=TRUE, cache=TRUE}
+bstCntrl<-trainControl(method = "cv",number=5)
+bst<-train(classe~.,method="gbm",data=TrainData,trControl=bstCntrl,verbose=FALSE)
+bst$finalModel
+```
+
+### Out of Sample Error - Testing against the holdout
+
+The goal of the project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set.  
+
+We now use the Test data set to test our models and get a sense of the out of sample error or accuracy rate for future predictions.
+
+#### Accuracy - Decision Tree
+```{r Acc DT} }
+dtpred<-predict(dt,newdata=TestData)
+confusionMatrix(dtpred,TestData$classe)
+```
+#### Accuracy - Random Forest
+```{r Acc rf} }
+rfpred<-predict(rf,newdata=TestData)
+confusionMatrix(rfpred,TestData$classe)
+```
+#### Accuracy - Boosted
+```{r Acc bst} }
+bstpred<-predict(bst,newdata=TestData)
+confusionMatrix(bstpred,TestData$classe)
+```
+
+So we see that the decision tree has an accuracy rate of 53.05%, the random forest a rate of 99.47%, and the boosted model a rate of 95.87%.  
+
+So we will use the random forest model to predict future observations.
+
+## Predicting the quiz questions
+
+```{r quiz }
+QuizData<-read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+predict(rf,newdata=QuizData)
+```
+
+
+
+
